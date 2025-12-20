@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools", "setuptools-scm"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pyflame-ai"
+authors = [
+    { name = "Isaev Ivan", email = "iv.isaev19@mail.ru" },
+]
+description = "My package description"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+classifiers = [
+    "Development Status :: 4 - Beta",
+]
+dependencies = [
+    "click>=8",
+    "py-spy",
+    "libcst",
+    "gitpython",
+    "openai>=2.14",
+]
+dynamic = ["version"]
+
+[tool.setuptools.dynamic]
+version = { attr = "pyflame_ai.__version__" }
+
+[project.scripts]
+pyflame-ai = "pyflame_ai.cli:cli"
