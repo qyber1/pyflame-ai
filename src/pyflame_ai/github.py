@@ -91,7 +91,7 @@ class GitHubRefactor:
         self.func_name = func_name
         self.refactor_code = refactor_code
 
-    def refactor(self):
+    def refactor(self, token):
         """
         Основной метод для замены функции в исходном коде и пуша изменений.
 
@@ -122,9 +122,9 @@ class GitHubRefactor:
             return _echo_error("Замена функции не удалась")
 
         self.source.write_text(updated_module.code, encoding="utf-8")
-        return self._git_workflow()
+        return self._git_workflow(token)
 
-    def _git_workflow(self):
+    def _git_workflow(self, token):
         """
         Создаёт уникальную ветку, коммитит изменения и пушит их в удалённый репозиторий.
 
@@ -144,9 +144,17 @@ class GitHubRefactor:
         repo.git.checkout('HEAD', b=branch_name)
         repo.git.add(str(self.source))
         commit = repo.index.commit(f"Refactor function '{self.func_name}'")
-
         origin = repo.remote(name='origin')
         origin.push(branch_name)
+
+        url = origin.url
+        if url.startswith("https://"):
+            url = url.replace(
+                "https://",
+                f"https://{token}@"
+            )
+
+        repo.git.push(url, branch_name)
 
         url = origin.url
         if url.endswith('.git'):
@@ -156,7 +164,6 @@ class GitHubRefactor:
             parts = url.split(':', 1)
             url = f"https://github.com/{parts[1]}"
 
-        # Ссылка на коммит
         commit_url = f"{url}/commit/{commit.hexsha}"
         return commit_url
 

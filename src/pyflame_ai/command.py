@@ -67,7 +67,7 @@ class Command:
             return _echo_success('Готовый код к рефакторингу\n' + refactor_code)
 
         github_refactor = GitHubRefactor(self.path, result['function_totals'][0]['function'], refactor_code)
-        url_commit = github_refactor.refactor()
+        url_commit = github_refactor.refactor(self.config.get_github_token())
         if url_commit:
             return _echo_success('Успешно создан коммит: ' + url_commit)
 
