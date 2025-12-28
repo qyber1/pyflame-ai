@@ -120,11 +120,9 @@ class GitHubRefactor:
         updated_module = module.visit(transformer)
         if transformer.replaced_count == 0:
             return _echo_error("Замена функции не удалась")
+        return self._git_workflow(token, updated_module.code)
 
-        self.source.write_text(updated_module.code, encoding="utf-8")
-        return self._git_workflow(token)
-
-    def _git_workflow(self, token):
+    def _git_workflow(self, token, updated_code):
         """
         Создаёт уникальную ветку, коммитит изменения и пушит их в удалённый репозиторий.
 
@@ -138,6 +136,7 @@ class GitHubRefactor:
         if repo.is_dirty():
             return _echo_error("Рабочее дерево не чистое, коммит невозможен")
 
+        self.source.write_text(updated_code, encoding="utf-8")
         rand_suffix = ''.join(random.choices(string.ascii_lowercase + string.digits, k=6))
         branch_name = f"refactor/{self.func_name}-{rand_suffix}"
 
