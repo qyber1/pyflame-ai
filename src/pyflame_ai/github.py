@@ -143,14 +143,22 @@ class GitHubRefactor:
         repo.git.checkout('HEAD', b=branch_name)
         repo.git.add(str(self.source))
         commit = repo.index.commit(f"Refactor function '{self.func_name}'")
+        origin = repo.remote(name='origin')
+        original_url = origin.url
+
+        if token and original_url.startswith('https://github.com/'):
+            auth_url = original_url.replace('https://github.com/', f'https://{token}@github.com/')
+            origin.set_url(auth_url)
 
         with repo.git.custom_environment(
-                GIT_CONFIG_COUNT="1",
-                GIT_CONFIG_KEY_0="http.extraHeader",
-                GIT_CONFIG_VALUE_0=f"Authorization: Bearer {token}",
+                GCM_INTERACTIVE='Never',
+                GIT_TERMINAL_PROMPT='0'
         ):
-            origin = repo.remote(name='origin')
-            origin.push(branch_name)
+            try:
+                origin.push(branch_name)
+            finally:
+                if token and original_url.startswith('https://github.com/'):
+                    origin.set_url(original_url)
 
         url = origin.url
         if url.endswith('.git'):

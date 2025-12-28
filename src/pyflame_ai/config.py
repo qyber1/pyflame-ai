@@ -31,7 +31,7 @@ class Config:
             self._parser.write(f)
 
     def update_github_token(self, token):
-        self._parser['sudo'] = {'password': token}
+        self._parser['github'] = {'token': token}
         with open(self.file, 'w') as f:
             self._parser.write(f)
 
