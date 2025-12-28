@@ -68,7 +68,8 @@ class Command:
 
         github_refactor = GitHubRefactor(self.path, result['function_totals'][0]['function'], refactor_code)
         url_commit = github_refactor.refactor()
-        return _echo_success('Успешно создан коммит: ' + url_commit)
+        if url_commit:
+            return _echo_success('Успешно создан коммит: ' + url_commit)
 
     def _run_py_spy(self):
         win_available = '-s' if sys.platform == 'win32' else ''
