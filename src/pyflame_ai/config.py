@@ -17,21 +17,21 @@ class Config:
     def file(self):
         return self._config_file
 
-    def get_password(self):
+    def get_github_token(self):
         if not self.config_exist():
             raise ConfigNotFound()
         self._read_config()
-        return self._parser['sudo']['password']
+        return self._parser['github']['token']
 
-    def set_password(self, password):
+    def set_github_token(self, token):
         if self.config_exist():
             raise ConfigAlreadyExists()
-        self._parser['sudo'] = {'password': password}
+        self._parser['github'] = {'token': token}
         with open(self.file, 'w') as f:
             self._parser.write(f)
 
-    def update_password(self, password):
-        self._parser['sudo'] = {'password': password}
+    def update_github_token(self, token):
+        self._parser['sudo'] = {'password': token}
         with open(self.file, 'w') as f:
             self._parser.write(f)
 

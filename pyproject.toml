@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "pyflame-ai"
 authors = [
-    {name = "Isaev Ivan", email = "iv.isaev19@mail.ru"},
+    { name = "Isaev Ivan", email = "iv.isaev19@mail.ru" },
 ]
 description = "My package description"
 readme = "README.md"
@@ -16,11 +16,15 @@ classifiers = [
 ]
 dependencies = [
     "click>=8",
+    "py-spy",
+    "libcst",
+    'gitpython',
+    "openai>=2.14"
 ]
 dynamic = ["version"]
 
 [tool.setuptools.dynamic]
-version = {attr = "pyflame_ai.__version__"}
+version = { attr = "pyflame_ai.__version__" }
 
 [project.scripts]
 pyflame-ai = "pyflame_ai.cli:cli"

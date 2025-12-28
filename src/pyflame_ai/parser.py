@@ -1,27 +1,91 @@
+import ast
+import json
 import re
 from collections import defaultdict
-
-import click
+from pathlib import Path
+from typing import Optional
 
 from pyflame_ai._styled import _echo_error, _echo_usual
 
 
 class Parser:
+    """
+    Парсер вывода py-spy для анализа производительности Python-кода.
+
+    Извлекает стеки вызовов, подсчитывает количество сэмплов для каждой функции и модуля,
+    вычисляет приоритет оптимизации и формирует структурированный результат анализа.
+
+    Атрибуты:
+        file (str | Path): Путь к файлу с сырым выводом py-spy.
+        total_samples (int): Общее количество сэмплов.
+        main_module_name (str | None): Имя основного модуля.
+        overhead_samples (int): Количество сэмплов, затраченных на импорт/инициализацию.
+        optimization_priority (defaultdict): Распределение сэмплов по функциям для оптимизации.
+        function_totals (defaultdict): Суммарные сэмплы по функциям.
+        module_samples (defaultdict): Суммарные сэмплы по модулям.
+        result (dict): Итоговый результат анализа.
+    """
+
     def __init__(self, file):
+        """
+        :param file: Путь к файлу с выводом py-spy
+        """
         self.file = file
         self.total_samples = 0
         self.main_module_name = None
         self.overhead_samples = 0
 
-        # Для хранения данных
-        self.optimization_priority = defaultdict(int)  # func:line -> samples
-        self.function_totals = defaultdict(int)  # func -> samples
-        self.module_samples = defaultdict(int)  # module -> samples
+        self.optimization_priority = defaultdict(int)
+        self.function_totals = defaultdict(int)
+        self.module_samples = defaultdict(int)
 
-        # Результат
         self.result = {}
 
+    def extract_function_source_from_module(self) -> Optional[str]:
+        """
+        Извлекает исходный код самой "тяжёлой" функции из её модуля.
+
+        :return: True, если код функции найден и добавлен в self.result['source_code'], иначе False
+        """
+        try:
+            module = Path(self.result['module_distribution'][0]['module'])
+            func_name = self.result['function_totals'][0]['function']
+        except IndexError:
+            return False
+
+        source = module.read_text(encoding="utf-8")
+        lines = source.splitlines()
+
+        tree = ast.parse(source)
+        code = None
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                if node.name == func_name:
+                    start = (
+                        min(d.lineno for d in node.decorator_list) - 1
+                        if node.decorator_list
+                        else node.lineno - 1
+                    )
+                    end = node.end_lineno
+                    code = "\n".join(lines[start:end])
+
+        if code is None:
+            return False
+
+        self.result['source_code'] = code
+        return True
+
     def parse(self) -> dict:
+        """
+        Основной метод парсинга файла py-spy.
+
+        1. Считывает файл построчно.
+        2. Подсчитывает сэмплы по стеку вызовов.
+        3. Формирует структурированный результат.
+        4. Извлекает исходный код функции для рефакторинга.
+
+        :return: dict с результатом анализа
+        """
         with open(self.file, 'r', encoding='utf-8') as f:
             for line in f:
                 line = line.strip()
@@ -41,58 +105,50 @@ class Parser:
 
                 self.total_samples += samples_count
 
-                # Определяем основной модуль (первый <module> из dummy.py)
                 if self.main_module_name is None:
                     self._extract_main_module_name(stack_str)
 
-                # Анализируем стек
                 self._analyze_stack(stack_str, samples_count)
 
         self._format_result()
+        if not self.extract_function_source_from_module():
+            _echo_error('Не получилось найти фунцию для рефакторинга')
+            return
         return self.result
 
     def _analyze_stack(self, stack_str, samples_count) -> None:
         """
-        Анализирует стек вызовов и распределяет samples.
+        Анализирует стек вызовов и распределяет сэмплы между функциями и модулями.
+
+        :param stack_str: Строковое представление стека вызовов
+        :param samples_count: Количество сэмплов для этого стека
         """
         items = [item.strip() for item in stack_str.split(';') if item.strip()]
 
-        # Определяем тип стека
         stack_type = self._classify_stack(items)
 
         if stack_type == "import":
-            # Импорт модуля - считаем как overhead/initialization
             self.overhead_samples += samples_count
-
-            # Но также можем учитывать активную функцию в импортируемом модуле
             active_func = self._get_active_function(items)
             if active_func:
                 func_name, module_name, line_num = active_func
-                # Учитываем как функцию из импортируемого модуля
                 key = f"{func_name}:{line_num}"
                 self.optimization_priority[key] += samples_count
                 self.function_totals[func_name] += samples_count
                 self.module_samples[module_name] += samples_count
 
         elif stack_type == "main_module_code":
-            # Код основного модуля
-            # Удаляем <module> из основного модуля
             if items and items[0].startswith('<module>'):
                 items = items[1:]
-
             if not items:
-                # Только <module> - initialization overhead
                 self.overhead_samples += samples_count
             else:
-                # Обрабатываем функции
                 self._process_functions(items, samples_count, self.main_module_name)
 
         elif stack_type == "other_module":
-            # Код из другого модуля (не импорт)
             active_func = self._get_active_function(items)
             if active_func:
                 func_name, module_name, line_num = active_func
-                # Учитываем как функцию из другого модуля
                 key = f"{func_name}:{line_num}"
                 self.optimization_priority[key] += samples_count
                 self.function_totals[func_name] += samples_count
@@ -100,15 +156,17 @@ class Parser:
 
     def _classify_stack(self, items) -> str:
         """
-        Классифицирует стек вызовов:
-        - "import": импорт модуля (содержит importlib)
+        Классифицирует стек вызовов на типы:
+        - "import": импорт модуля
         - "main_module_code": код основного модуля
         - "other_module": код другого модуля
+
+        :param items: список элементов стека
+        :return: тип стека
         """
         if not items:
             return "unknown"
 
-        # Проверяем на импорт (содержит importlib функции)
         import_patterns = [
             '_find_and_load', '_find_and_load_unlocked',
             '_load_unlocked', 'exec_module', '_call_with_frames_removed'
@@ -119,10 +177,8 @@ class Parser:
                 if pattern in item:
                     return "import"
 
-        # Проверяем основной модуль
         first_item = items[0]
         if first_item.startswith('<module>'):
-            # Извлекаем имя модуля
             match = re.search(r'\(([^)]+\.py):', first_item)
             if match:
                 module_name = match.group(1)
@@ -135,47 +191,53 @@ class Parser:
 
     def _get_active_function(self, items) -> tuple[str, str, str] | None:
         """
-        Возвращает активную функцию (последнюю в стеке).
-        Возвращает (function_name, module_name, line_number)
+        Возвращает последнюю (активную) функцию в стеке вызовов.
+
+        :param items: список элементов стека
+        :return: кортеж (function_name, module_name, line_number) или None
         """
         if not items:
             return None
 
-        # Берем последний элемент стека
         last_item = items[-1]
-
-        # Парсим функцию
         match = re.search(r'([^ ]+)\s+\(([^)]+)\)', last_item)
         if not match:
             return None
 
         func_name = match.group(1)
-        location = match.group(2)  # "dummy2.py:4" или "<frozen importlib._bootstrap>:1360"
+        location = match.group(2)
 
-        # Разделяем module:line
         if ':' in location:
             module_part, line_part = location.split(':', 1)
-            # Очищаем имя модуля (убираем <frozen ...>)
             module_name = self._clean_module_name(module_part)
             return (func_name, module_name, line_part)
 
         return None
 
     def _clean_module_name(self, module_str) -> str:
-        """Очищает имя модуля от <frozen ...>."""
+        """
+        Очищает имя модуля от <frozen ...>.
+
+        :param module_str: строка с именем модуля
+        :return: очищенное имя модуля
+        """
         if module_str.startswith('<frozen '):
-            # Извлекаем реальное имя модуля
             match = re.search(r'<frozen ([^>]+)>', module_str)
             if match:
                 return match.group(1)
         return module_str
 
     def _process_functions(self, items, samples_count, module_name) -> None:
-        """Обрабатывает функции из стека."""
+        """
+        Обрабатывает функции из стека вызовов и распределяет сэмплы.
+
+        :param items: элементы стека
+        :param samples_count: количество сэмплов
+        :param module_name: имя модуля
+        """
         if not items:
             return
 
-        # Берем активную функцию
         active_func_info = items[-1]
         match = re.search(r'([^ ]+)\s+\([^:]+:(\d+)\)', active_func_info)
         if not match:
@@ -184,29 +246,32 @@ class Parser:
         func_name = match.group(1)
         line_number = match.group(2)
 
-        # Ключ с указанием модуля для избежания конфликтов
         key = f"{func_name}:{line_number}"
         self.optimization_priority[key] += samples_count
         self.function_totals[func_name] += samples_count
         self.module_samples[module_name] += samples_count
 
     def _extract_main_module_name(self, stack_str) -> None:
-        """Извлекает имя основного модуля."""
-        items = [item.strip() for item in stack_str.split(';') if item.strip()]
+        """
+        Извлекает имя основного модуля из строки стека вызовов.
 
+        :param stack_str: строка стека вызовов
+        """
+        items = [item.strip() for item in stack_str.split(';') if item.strip()]
         for item in items:
             if item.startswith('<module>'):
                 match = re.search(r'\(([^)]+\.py):', item)
                 if match:
                     module_name = match.group(1)
-                    # Игнорируем <frozen> и временные модули
                     if not module_name.startswith('<'):
                         self.main_module_name = module_name
                         break
 
     def _format_result(self) -> None:
-        """Форматирует результат."""
-        # Сортируем
+        """
+        Формирует итоговый результат анализа, сортирует функции и модули по сэмплам
+        и вычисляет процентное распределение.
+        """
         sorted_priority = sorted(
             self.optimization_priority.items(),
             key=lambda x: x[1],
@@ -244,7 +309,7 @@ class Parser:
                     'samples': samples,
                     'percentage': format_percentage(samples)
                 }
-                for location, samples in sorted_priority[:20]  # топ-20
+                for location, samples in sorted_priority[:20]
             ],
             'function_totals': [
                 {
@@ -272,14 +337,26 @@ class Parser:
 
 
 def print_report(filename, raw: bool = False) -> None:
+    """
+    Выводит на экран или в сыром виде результат анализа py-spy.
+
+    Иначе печатает красиво отформатированный отчёт с:
+    - Сводной информацией
+    - Распределением по модулям
+    - Топ функций для оптимизации
+    - Суммарные значения по функциям
+    - Общую статистику по коду и импорту
+
+    :param filename: Путь к файлу с выводом py-spy
+    :param raw:  Если raw=True, возвращает JSON с результатами анализа.
+    """
     _parser = Parser(filename)
     try:
         result = _parser.parse()
     except FileNotFoundError as e:
         return _echo_error(f'Файла не существует: {e.filename}')
     if raw:
-        _echo_usual(result)
-        return
+        return _echo_usual(json.dumps(result, indent=2))
 
     _echo_usual("=" * 70)
     _echo_usual("FLAMEGRAPH ANALYSIS REPORT")
